@@ -41,5 +41,5 @@ class WeightL1Loss(nn.Module):
         self.loss_fn = nn.L1Loss()
         self.weights = [0.1, 0.2, 0.2, 0.5]
 
-    def forward(self, logists: Tensor, target: Tensor):
-        return sum(self.weights[i] * self.loss_fn(logists[i], target) for i in range(len(self.weights)))
+    def forward(self, logits: Tensor, target: Tensor):
+        return sum(self.weights[i] * self.loss_fn(logits[i], target) for i in range(len(self.weights)))

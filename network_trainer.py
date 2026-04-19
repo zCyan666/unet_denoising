@@ -258,18 +258,15 @@ def main():
     IMGSIZE = 256
     GAMMA = 0.95
     DROUPOUTRATE = 0.3
-    # DATAFOLDERS = r"D:\DeepLearningScratch\Data\COVID-19_Radiography_Dataset\Viral Pneumonia"
     DATAFOLDERS = r"./Data/mag_train"
 
     os.makedirs("./checkpoints", exist_ok=True)
     pt_path = './checkpoints/unet_denoise_1.pth'
     model = UnetDenoiser(1, 1, network_depth=NETDEPTH, dropout_rate=DROUPOUTRATE)
 
-    # loss_fn = BCEWithDiceLoss(1.0, 1.0, SMOOTHING)
     # loss_fn = WeightL1Loss()
     loss_fn = nn.L1Loss()
 
-    # optimizer = torch.optim.SGD(model.parameters(), lr=LR, weight_decay=0.01)
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     scaler = torch.amp.GradScaler(DEVICE)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=GAMMA)

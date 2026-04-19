@@ -258,7 +258,7 @@ class UnetWithResidual(nn.Module):
 
         self.conv = None
         if require_1x1_conv:
-            self.conv = nn.Conv2d(in_channel, out_channel, kernel_size=1, stride=1)
+            self.conv = nn.Conv2d(out_channel, out_channel, kernel_size=1, stride=1)
 
     def forward(self, x):
         x = self.base_unet(x)

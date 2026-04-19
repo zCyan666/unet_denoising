@@ -1,7 +1,6 @@
 import torch
 from torch import nn, Tensor
 
-
 class DiceLoss(nn.Module):
     def __init__(self, smoothing):
         super().__init__()
@@ -42,8 +41,5 @@ class WeightL1Loss(nn.Module):
         self.loss_fn = nn.L1Loss()
         self.weights = [0.1, 0.2, 0.2, 0.5]
 
-    def forward(self, logists, target):
-        loss_sum = 0
-        for i in range(len(self.weights)):
-            loss_sum += self.weights[i] * self.loss_fn(logists[i], target)
-        return loss_sum
+    def forward(self, logists: Tensor, target: Tensor):
+        return sum(self.weights[i] * self.loss_fn(logists[i], target) for i in range(len(self.weights)))

@@ -1,35 +1,26 @@
-"""
-We monitored the Dice coefficient and Intersection over Union (IoU),
-and used early-stop mechanism on the validation set.
-used Adam optimizer with a learning rate of 3e-4.
-"""
+import os
 import random
-import typing
+import re
+import time
+from typing import Optional
 from pathlib import Path
 from typing import TextIO
-from PIL import Image
+
 import numpy as np
 import torch
 import torch.nn as nn
+import tqdm
+from PIL import Image
+from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset
-import torch.nn.functional as Func
-from models.network_unet import (
-    ExtendableUnet,
-    UnetWithResidual,
-    UnetDenoiseResidual,
-    UnetPlusPlusDenoise
-)
 # from models.network_resnet import Residual
-from loss_utils import WeightL1Loss
 from torchvision.transforms import v2
 from torchvision.transforms.v2 import functional as F
-from torch import Tensor
+from torchvision.transforms.v2 import Transform
+from models.network_unet import (
+    UnetDenoiseResidual
+)
 from plots.transform_view import plot
-import tqdm
-from sklearn.model_selection import train_test_split
-import os
-import re
-import time
 
 
 def train_test_splitter_classification(folder, split_amount=0.1, random=123, shuffle=True):
@@ -38,36 +29,27 @@ def train_test_splitter_classification(folder, split_amount=0.1, random=123, shu
     def key_fn(filename):
         return [int(c) for c in re.split(r'(\d+)', filename) if c.isdigit()]
 
-    if "masks" in files:
-        mask_dir = os.path.join(folder, files[0])
-        image_dir = os.path.join(folder, files[1])
+    files.sort(key=key_fn)
 
-        dir_features = os.listdir(image_dir)
-        dir_masks = os.listdir(mask_dir)
-        dir_features.sort(key=key_fn)
-        dir_masks.sort(key=key_fn)
-        inputs = tuple(os.path.join(mask_dir, f) for f in dir_features)
-        targets = tuple(os.path.join(image_dir, f) for f in dir_masks)
-    else:
-        files.sort(key=key_fn)
-
-        inputs = tuple(os.path.join(folder, f) for f in files if "mask" not in f)
-        targets = tuple(os.path.join(folder, f) for f in files if f.rfind("mask") != -1)
+    inputs = tuple(os.path.join(folder, f) for f in files if "mask" not in f)
+    targets = tuple(os.path.join(folder, f) for f in files if f.rfind("mask") != -1)
 
     X = np.array(inputs)
     y = np.array(targets)
-    assert X.shape == y.shape
+
+    assert X.shape == y.shape, "You don't have same nums"
+
     train_features, test_features, train_masks, test_masks = train_test_split(X, y,
                                                                               test_size=split_amount,
-                                                                              random_state=random, shuffle=shuffle
+                                                                              random_state=random,
+                                                                              shuffle=shuffle
                                                                               )
     return (train_features, train_masks), (test_features, test_masks)
 
 
 class MyClassificationDataSet(Dataset):
-    def __init__(self, files: list | tuple, transform):
-        if len(files) == 2:
-            self.inputs, self.masks = files
+    def __init__(self, files: list | tuple, transform: Optional[Transform]):
+        self.inputs, self.masks = files
         self.transform = transform
         # self.inputs = self.inputs[:16]
         # self.masks = self.masks[:16]
@@ -90,7 +72,7 @@ class MyClassificationDataSet(Dataset):
 
 
 class MyClassificationDataSetNumpy(Dataset):
-    def __init__(self, files: list | tuple, transform):
+    def __init__(self, files: list | tuple, transform: Optional[Transform]):
         self.inputs, self.masks = files
         self.transform = transform
 
@@ -98,8 +80,8 @@ class MyClassificationDataSetNumpy(Dataset):
         return len(self.inputs)
 
     def __getitem__(self, idx):
-        mag = torch.tensor(np.load(self.inputs[idx]), dtype=torch.float32, requires_grad=True).unsqueeze(0)
-        target = torch.tensor(np.load(self.masks[idx]), dtype=torch.float32, requires_grad=True).unsqueeze(0)
+        mag = torch.tensor(np.load(self.inputs[idx]), dtype=torch.float32).unsqueeze(0)
+        target = torch.tensor(np.load(self.masks[idx]), dtype=torch.float32).unsqueeze(0)
 
         return mag, target
 
@@ -155,7 +137,8 @@ class MyNetworkTrainer:
         self.scaler = scaler
         self.view_plot = view_plot
 
-    def check_training_health(self, loss, epoch, thres):
+    @staticmethod
+    def check_training_health(loss, epoch, thres):
         if torch.isnan(loss) or torch.isinf(loss):
             raise RuntimeError(f"Loss is NaN/Inf at epoch {epoch}")
 
@@ -221,7 +204,7 @@ class MyNetworkTrainer:
 
         return total_loss / len(self.val_loader)
 
-    def train(self, logger: typing.TextIO) -> None:
+    def train(self, logger: TextIO) -> None:
         loss_curr = float('inf')
         for epoch in range(self.train_epoch):
             prog = tqdm.tqdm(self.train_loader, desc=f"Epoch: [{epoch + 1}/{self.train_epoch}]")

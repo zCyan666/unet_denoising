@@ -5,11 +5,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.transforms import CenterCrop
 
-ACTIVATION = ["norm2d_leakyrelu", "leakyrelu_norm2d", "norm2d_relu"]
-conv_count = 0
+ACTIVATION = [
+    "norm2d_leakyrelu", 
+    "leakyrelu_norm2d", 
+    "norm2d_relu"
+]
+CONV_NUM = 0
 
-
-# Conv2d | BatchNorm2D | LeakyReLu | DropOut
 # Dropout应在训练中使用，在模型推理中应该丢弃
 class _SingleConv2D(nn.Module):
     conv_2d_kwargs = dict(stride=1, dilation=1, groups=1, padding=1, bias=False)
@@ -30,16 +32,16 @@ class _SingleConv2D(nn.Module):
             self.dropout_kwargs['p'] = dropout_rate
 
         self.conv2d = nn.Conv2d(in_channel, out_channel, conv_kernel_size, **self.conv_2d_kwargs)
-        self.dropout = nn.Dropout(**self.dropout_kwargs) if dropout_in_uplayer and self.dropout_kwargs[
-            'p'] > 0.0 else None
+        self.dropout = nn.Dropout(**self.dropout_kwargs) if (dropout_in_uplayer and 
+                                                             self.dropout_kwargs['p'] > 0.0) else None
         self.batch2d = nn.BatchNorm2d(out_channel, **self.batch_2d_kwargs)
         self.nonlin = nn.LeakyReLU(**self.relu_kwargs)
         self.relu = nn.ReLU()
         self.mode = activation
 
     def forward(self, x):
-        global conv_count
-        conv_count += 1
+        global CONV_NUM
+        CONV_NUM += 1
 
         x = self.conv2d(x)
 
@@ -393,8 +395,6 @@ class UnetPlusPlusWithLogits(nn.Module):
 
                 x_results[i][j] = self.conv_layers[i][j](concatenated)
 
-        # s = x_results[0][1].shape[-1] * x_results[0][1].shape[-2]
-        # print(torch.count_nonzero(x_results[0][1]), s)
         final_output = self.final_conv(x_results[0][self.network_depth - 1])
 
         # 收集深度监督输出

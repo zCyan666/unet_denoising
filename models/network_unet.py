@@ -219,7 +219,7 @@ class ExtendableUnet(nn.Module):
         return x
 
 
-class UnetDenoiseResidual(nn.Module):
+class UnetDenoiser(nn.Module):
     def __init__(self, in_channel=3, out_channel=1, stack_size=2, down_layer_start_feature=64, dropout_rate=None,
                  network_depth=5, segout_use_bias=False, pool_kernel_size=(2, 2), conv_kernel_size=(3, 3), **kwargs):
         super().__init__()
@@ -244,36 +244,29 @@ class UnetWithResidual(nn.Module):
                                         down_layer_start_feature=down_layer_start_feature, network_depth=network_depth,
                                         segout_use_bias=segout_use_bias, pool_kernel_size=pool_kernel_size,
                                         conv_kernel_size=conv_kernel_size)
-        self.conv2d = nn.Conv2d(out_channel, out_channel, conv_kernel_size, padding=1)
-        self.bn2d = nn.BatchNorm2d(out_channel)
 
-        # 我们需要负值信息，保留负值
-        self.relu = nn.LeakyReLU(negative_slope=negative_slope, inplace=False)
-        self.require_1x1_conv = require_1x1_conv
-
-        if self.require_1x1_conv:
-            self.conv = nn.Conv2d(in_channel, out_channel, kernel_size=1, stride=1)
-
-    def create_residual_layer(self, nums):
-        for i in range(nums):
-            yield nn.Sequential(
-                self.conv2d,
-                self.bn2d,
-                self.relu,
-                self.conv2d,
-                self.bn2d,
+        self.res_blocks = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(out_channel, out_channel, 3, padding=1),
+                nn.BatchNorm2d(out_channel),
+                nn.LeakyReLU(negative_slope, inplace=True),
+                nn.Conv2d(out_channel, out_channel, 3, padding=1),
+                nn.BatchNorm2d(out_channel),
             )
+            for _ in range(2)
+        ])
+
+        self.conv = None
+        if require_1x1_conv:
+            self.conv = nn.Conv2d(in_channel, out_channel, kernel_size=1, stride=1)
 
     def forward(self, x):
         x = self.base_unet(x)
-
-        # Residual
-        res_iter = self.create_residual_layer(2)
         y, temp_x = None, x
 
-        for layer in res_iter:
-            y = layer(temp_x)
-            if self.require_1x1_conv:
+        for block in self.res_blocks:
+            y = block(temp_x)
+            if self.conv is not None:
                 temp_x = self.conv(temp_x)
             y += temp_x
             temp_x = y

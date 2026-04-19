@@ -18,7 +18,8 @@ from torchvision.transforms import v2
 from torchvision.transforms.v2 import functional as F
 from torchvision.transforms.v2 import Transform
 from models.network_unet import (
-    UnetDenoiseResidual
+    UnetDenoiser,
+    UnetPlusPlusWithLogits
 )
 from plots.transform_view import plot
 
@@ -262,7 +263,7 @@ def main():
 
     os.makedirs("../checkpoints", exist_ok=True)
     pt_path = '../checkpoints/unet_denoise_1.pth'
-    model = UnetDenoiseResidual(1, 1, network_depth=NETDEPTH, dropout_rate=DROUPOUTRATE)
+    model = UnetDenoiser(1, 1, network_depth=NETDEPTH, dropout_rate=DROUPOUTRATE)
 
     # loss_fn = BCEWithDiceLoss(1.0, 1.0, SMOOTHING)
     # loss_fn = WeightL1Loss()

@@ -19,7 +19,7 @@ from torchvision.transforms.v2 import functional as F
 from torchvision.transforms.v2 import Transform
 from models.network_unet import (
     UnetDenoiser,
-    UnetPlusPlusWithLogits
+    UnetPlusPlusDenoise
 )
 from plots.transform_view import plot
 
@@ -291,7 +291,7 @@ def main():
         random_state=666,
     )
 
-    logger = create_new_log('train_log', './logs')
+    logger = create_new_log('train_log', '../plots/logs')
     trainer.train(logger)
 
 

@@ -7,7 +7,7 @@ from skimage.metrics import structural_similarity, peak_signal_noise_ratio
 import matplotlib.pyplot as plt
 
 from models.network_unet import (
-    UnetDenoiseResidual,
+    UnetDenoiser,
     UnetPlusPlusDenoise
 )
 from PIL import Image

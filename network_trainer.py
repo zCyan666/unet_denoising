@@ -259,10 +259,10 @@ def main():
     GAMMA = 0.95
     DROUPOUTRATE = 0.3
     # DATAFOLDERS = r"D:\DeepLearningScratch\Data\COVID-19_Radiography_Dataset\Viral Pneumonia"
-    DATAFOLDERS = r"../Data/mag_train"
+    DATAFOLDERS = r"./Data/mag_train"
 
-    os.makedirs("../checkpoints", exist_ok=True)
-    pt_path = '../checkpoints/unet_denoise_1.pth'
+    os.makedirs("./checkpoints", exist_ok=True)
+    pt_path = './checkpoints/unet_denoise_1.pth'
     model = UnetDenoiser(1, 1, network_depth=NETDEPTH, dropout_rate=DROUPOUTRATE)
 
     # loss_fn = BCEWithDiceLoss(1.0, 1.0, SMOOTHING)
@@ -291,7 +291,7 @@ def main():
         random_state=666,
     )
 
-    logger = create_new_log('train_log', '../plots/logs')
+    logger = create_new_log('train_log', './plots/logs')
     trainer.train(logger)
 
 

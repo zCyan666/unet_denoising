@@ -1,4 +1,5 @@
 import os
+
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 from pathlib import Path
@@ -10,12 +11,9 @@ from models.network_unet import (
     UnetDenoiser,
     UnetPlusPlusDenoise
 )
-from PIL import Image
 import numpy as np
 import torch
 import pywt
-import torch.nn as nn
-import torchvision.transforms as transforms
 import re
 import random
 
@@ -74,7 +72,7 @@ def wavelet_denoising(signal, wavelet='db4', level=4, method='soft', threshold_f
     return denoised, threshold, sigma
 
 
-def wavelet_denoise_2d(anomaly, wavelet='db4', level: Optional[int]=None, method='soft'):
+def wavelet_denoise_2d(anomaly, wavelet='db4', level: Optional[int] = None, method='soft'):
     """2D磁异常小波去噪"""
     denoised, threshold, sigma = wavelet_denoising(anomaly, wavelet=wavelet, level=level, method=method)
     return denoised
@@ -95,7 +93,7 @@ def predict(model, arr: str | np.ndarray, device, img_preprocess=None) -> torch.
 
     arr = torch.tensor(arr, dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(0)
     pred = model(arr)
-#     pred = torch.clamp(pred, 0.0, 1.0)
+    #     pred = torch.clamp(pred, 0.0, 1.0)
     return pred
 
 
@@ -109,10 +107,12 @@ def plot_figure(*arr_args, **styles) -> None:
     plt.tight_layout()
     plt.show()
 
+
 def compute_psnr_metrics(original, denoised, max_val=1.0):
     mse = np.mean((original - denoised) ** 2)
     psnr = 10 * np.log10(max_val ** 2 / mse)
     return psnr, mse
+
 
 if __name__ == '__main__':
 
@@ -125,7 +125,7 @@ if __name__ == '__main__':
         'dropout_rate': 0.0
     }
 
-    directory = '../Data/mag_test'
+    directory = './Data/mag_test'
     files = os.listdir(directory)
     files.sort(key=lambda s: [int(t) for t in re.split(r'(\d+)', s) if t.isdigit()])
     pairs = []
@@ -141,8 +141,8 @@ if __name__ == '__main__':
     target = np.load(os.path.join(directory, target))
 
     # 预测的磁异常
-    model1 = init_model(UnetDenoiseResidual, '../checkpoints/unet_denoise_1.pth', DEVICE, **hparams)
-    model2 = init_model(UnetPlusPlusDenoise, '../checkpoints/unet++_denoise_1.pth', DEVICE, **hparams)
+    model1 = init_model(UnetDenoiser, './checkpoints/unet_denoise_1.pth', DEVICE, **hparams)
+    model2 = init_model(UnetPlusPlusDenoise, './checkpoints/unet++_denoise_1.pth', DEVICE, **hparams)
 
     pred1, pred2 = predict(model1, noisy, DEVICE), predict(model2, noisy, DEVICE)
 
@@ -154,16 +154,16 @@ if __name__ == '__main__':
     # 小波变换磁异常
     denoised = wavelet_denoise_2d(noisy, wavelet='sym4', level=4)
 
-    #snr_0, mse0 = compute_psnr_metrics(noisy, target)
+    # snr_0, mse0 = compute_psnr_metrics(noisy, target)
     psnr_1 = peak_signal_noise_ratio(target, denoised, data_range=1.0)
     psnr_2 = peak_signal_noise_ratio(target, pred1, data_range=1.0)
     psnr_3 = peak_signal_noise_ratio(target, pred2, data_range=1.0)
 
-    ssim1 = structural_similarity(target, denoised, win_size=11, data_range=1.0,channel_axis=None)
+    ssim1 = structural_similarity(target, denoised, win_size=11, data_range=1.0, channel_axis=None)
     ssim2 = structural_similarity(target, pred1, win_size=11, data_range=1.0, channel_axis=None)
     ssim3 = structural_similarity(target, pred2, win_size=11, data_range=1.0, channel_axis=None)
 
-    #print(f'磁异常信噪比: {snr_0} db, 均方误差MSE: {mse0}')
+    # print(f'磁异常信噪比: {snr_0} db, 均方误差MSE: {mse0}')
     print(f'小波变换磁异常信噪比: {psnr_1:.3f} db, SSIM指标: {ssim1:.4f}')
     print(f'unet神经网络磁异常信噪比: {psnr_2:.3f} db, SSIM指标: {ssim2:.4f}')
     print(f'unet++神经网络磁异常信噪比: {psnr_3:.3f} db, SSIM指标: {ssim3:.4f}')

@@ -368,9 +368,6 @@ def generate_training_pair(grid_size=128, area_size=5000, inc_f=90,
     clean2, X, Y, params = generate_plate_with_B0(grid_size, area_size, inc_f, dec_f)
 
     clean = clean1 + clean2
-    # print(clean)
-    # 生成标签
-    # label, grad = generate_label_from_magnetic_gradient(clean, threshold_percentile)
 
     noisy, single_noise = add_noise(clean, noise_percentage)
     return clean, noisy, single_noise, X, Y, spheres_info
@@ -378,21 +375,19 @@ def generate_training_pair(grid_size=128, area_size=5000, inc_f=90,
 def create_anomaly(i, save_dir):
     noise_percentage = random_float_range(0.5, 0.9)
     n_sphere = random.randint(1, 4)
-    # print(n_sphere)
+
     clean, noisy, noise, X, Y, spheres_info = generate_training_pair(
         grid_size=160, area_size=80, inc_f=90, dec_f=90,
         n_spheres=n_sphere, noise_percentage=noise_percentage
     )
 
-
     noisy_norm, clean_norm = standardize_min_max(clean, noisy)
 
-    # print(f"\rSaving...", i, end=' ')
     np.save(os.path.join(save_dir, f"anmoly_{i}.npy"), noisy_norm)
     np.save(os.path.join(save_dir, f"anmoly_mask_{i}.npy"), clean_norm)
 
 
-def gen_quick(num_sample, save_dir: str):
+def generate_datasets(num_sample, save_dir: str):
     creator = functools.partial(create_anomaly, save_dir=save_dir)
     with multiprocessing.Pool(processes=min(os.cpu_count(), 63)) as p:
         p.map(creator, range(num_sample))
@@ -400,62 +395,11 @@ def gen_quick(num_sample, save_dir: str):
 
 # ============ 主程序 ============
 if __name__ == "__main__":
-    directory = "../Data/mag_test"
-    os.makedirs(directory, exist_ok=True)
-    # asyncio.run(main())
-    gen_quick(50, directory)
-    # create_anomaly(0, directory)
-    # clean = standardize(clean)
-    # noisy = standardize(noisy)
+    directory_train = "../Data/mag_train"
+    directory_test = "../Data/mag_test"
 
-    ##print(clean)
-    noisy_norm = np.load(directory + "/anmoly_0.npy")
-    clean_norm = np.load(directory + "/anmoly_mask_0.npy", )
-    # print(f"\n球体数量: {len(spheres_info)}")
-    # print(f"地磁场: 倾角={spheres_info[0].get('inc_f')}, 偏角={spheres_info[0].get('dec_f')}")
-    # print(f"磁异常范围: {clean.min():.2f} ~ {clean.max():.2f} nT")
-    #
-    # print("\n各球体参数:")
-    # for info in spheres_info:
-    #     print(f"  球体{info['id']}: 中心=({info['cx']:.1f}, {info['cy']:.1f}, {info['cz']:.1f})m, "
-    #           f"半径={info['radius']:.1f}m, 磁化率={info['susceptibility']:.4f} SI")
-    #
-    # 可视化
-    fig, axes = plt.subplots(2, 2, figsize=(12, 12))
+    os.makedirs(directory_train, exist_ok=True)
+    os.makedirs(directory_test, exist_ok=True)
 
-    # 干净磁异常
-    cmap = "rainbow"
-    im1 = axes[0][0].imshow(clean_norm, cmap=cmap, origin='lower',
-                            extent=[-80, 80, -80, 80])
-    axes[0][0].set_title('干净磁异常')
-    axes[0][0].set_xlabel('X (m)')
-    axes[0][0].set_ylabel('Y (m)')
-    plt.colorbar(im1, ax=axes[0][0], label='nT')
-    #
-    # # 含噪磁异常
-    # im2 = axes[0][1].imshow(noisy_norm, cmap=cmap, origin='lower',
-    #                         extent=[-area_size, area_size, -area_size, area_size])
-    # axes[0][1].set_title(f'含噪磁异常({noise_percentage * 100}%)')
-    # axes[0][1].set_xlabel('X (m)')
-    # plt.colorbar(im2, ax=axes[0][1], label='nT')
-    #
-    # # 噪声
-    # im2 = axes[1][0].imshow(noisy_norm - clean_norm, cmap=cmap, origin='lower',
-    #                         extent=[-area_size, area_size, -area_size, area_size])
-    # axes[1][0].set_title(f'噪声')
-    # axes[1][0].set_xlabel('X (m)')
-    # plt.colorbar(im2, ax=axes[1][0], label='nT')
-    #
-    # denoised = wavelet_denoise_2d(noisy, wavelet='sym4')
-    # print("原始（信噪比db）：", compute_metrics(noisy, clean))
-    # print("原始（信噪比db）：", snr_metrix_norm(noisy, clean))
-    # print("原始（信噪比db）：", snr_metrix_std(noisy, clean))
-    # print("原始（信噪比db）：", snr_metrix_minmax(noisy, clean))
-    # print("小波去噪（信噪比db）：", compute_metrics(noisy, denoised))
-    # im2 = axes[1][1].imshow(denoised, cmap=cmap, origin='lower', extent=[-area_size, area_size, -area_size, area_size])
-    # axes[1][1].set_title(f'去噪后')
-    # axes[1][1].set_xlabel('X (m)')
-    # plt.colorbar(im2, ax=axes[1][1], label='nT')
-    #
-    plt.tight_layout()
-    plt.show()
+    generate_datasets(10000, directory_train)
+    generate_datasets(100, directory_test)

@@ -18,6 +18,7 @@ from torchvision.transforms import v2
 from torchvision.transforms.v2 import functional as F
 from torchvision.transforms.v2 import Transform
 
+from loss_utils import WeightL1Loss
 from models.network_unet import (
     UnetDenoiser,
     UnetPlusPlusDenoise
@@ -251,22 +252,22 @@ def main():
     torch.manual_seed(32142)
 
     DEVICE = "cuda" if torch.cuda.is_available() else 'cpu'
-    BATCHSIZE = 16
+    BATCHSIZE = 8
     SMOOTHING = 1e-7
     LR = 0.001
     NETDEPTH = 5
     EPOCH = 50
     IMGSIZE = 256
     GAMMA = 0.95
-    DROUPOUTRATE = 0.3
+    DROPOUT = True
     DATAFOLDERS = r"./Data/mag_train"
 
     os.makedirs("./checkpoints", exist_ok=True)
     pt_path = './checkpoints/unet_denoise_1.pth'
-    model = UnetDenoiser(1, 1, network_depth=NETDEPTH, dropout_rate=DROUPOUTRATE)
+    model = UnetPlusPlusDenoise(1, 1, network_depth=NETDEPTH, dropout=DROPOUT)
 
-    # loss_fn = WeightL1Loss()
-    loss_fn = nn.L1Loss()
+    loss_fn = WeightL1Loss()
+    #loss_fn = nn.L1Loss()
 
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     scaler = torch.amp.GradScaler(DEVICE)

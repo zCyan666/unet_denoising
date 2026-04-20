@@ -16,12 +16,12 @@ CONV_NUM = 0
 class _SingleConv2D(nn.Module):
     conv_2d_kwargs = dict(stride=1, dilation=1, groups=1, padding=1, bias=False)
     dropout_kwargs = dict(p=0.03, inplace=False)
-    batch_2d_kwargs = dict(eps=1e-5, momentum=0.1)
+    norm_2d_kwargs = dict(eps=1e-5, momentum=0.1, affine=False, track_running_stats=False)
     relu_kwargs = dict(negative_slope=0.1, inplace=False)
-
     def __init__(self, in_channel, out_channel, conv_kernel_size,
                  dropout_rate: Optional[int] = 0.1,
-                 stride=None, dropout_in_uplayer=False,
+                 stride: Optional[int] = 0.1,
+                 dropout=False,
                  activation='leakyrelu_norm2d'):
         super().__init__()
 
@@ -30,11 +30,15 @@ class _SingleConv2D(nn.Module):
 
         if dropout_rate is not None:
             self.dropout_kwargs['p'] = dropout_rate
+        else:
+            self.norm_2d_kwargs['affine'] = True
+            self.norm_2d_kwargs['track_running_stats'] = True
 
         self.conv2d = nn.Conv2d(in_channel, out_channel, conv_kernel_size, **self.conv_2d_kwargs)
-        self.dropout = nn.Dropout(**self.dropout_kwargs) if (dropout_in_uplayer and 
+        self.dropout = nn.Dropout2d(**self.dropout_kwargs) if (dropout and
                                                              self.dropout_kwargs['p'] > 0.0) else None
-        self.batch2d = nn.BatchNorm2d(out_channel, **self.batch_2d_kwargs)
+        self.norm2d = nn.BatchNorm2d(out_channel, **self.norm_2d_kwargs) if self.dropout is not None else \
+            nn.InstanceNorm2d(out_channel, **self.norm_2d_kwargs)
         self.nonlin = nn.LeakyReLU(**self.relu_kwargs)
         self.relu = nn.ReLU()
         self.mode = activation
@@ -49,11 +53,11 @@ class _SingleConv2D(nn.Module):
             x = self.dropout(x)
 
         if self.mode == ACTIVATION[0]:
-            return self.batch2d(self.nonlin(x))
+            return self.norm2d(self.nonlin(x))
         elif self.mode == ACTIVATION[1]:
-            return self.nonlin(self.batch2d(x))
+            return self.nonlin(self.norm2d(x))
         elif self.mode == ACTIVATION[2]:
-            return self.batch2d(self.relu(x))
+            return self.norm2d(self.relu(x))
 
         return F.relu(x)
 
@@ -61,7 +65,7 @@ class _SingleConv2D(nn.Module):
 class _StackedConvLayer(nn.Module):
     def __init__(self, in_feature_channel: int, out_feature_channel: int, stack_size, conv_kernel_size,
                  dropout_rate=None,
-                 dropout_in_uplayer=False, first_stride=None):
+                 dropout=False, first_stride=None):
         super().__init__()
         self.input_channel = in_feature_channel
         self.output_channel = out_feature_channel
@@ -69,9 +73,9 @@ class _StackedConvLayer(nn.Module):
         self.conv_blocks = nn.Sequential(
             *([_SingleConv2D(in_feature_channel, out_feature_channel, conv_kernel_size, dropout_rate,
                              stride=first_stride,
-                             dropout_in_uplayer=dropout_in_uplayer)] +
+                             dropout=dropout)] +
               [_SingleConv2D(out_feature_channel, out_feature_channel, conv_kernel_size, dropout_rate, stride=None,
-                             dropout_in_uplayer=dropout_in_uplayer) for _ in range(stack_size - 1)])
+                             dropout=dropout) for _ in range(stack_size - 1)])
         )
         self.dropout_rate = dropout_rate
 
@@ -277,7 +281,7 @@ class UnetWithResidual(nn.Module):
 class UnetPlusPlusWithLogits(nn.Module):
     def __init__(self, in_channels=3, out_channels=1, network_depth=5, first_stride=1, stack_size=2, dropout_rate=0.1,
                  start_feature=64, segout_use_bias=False, pool_kernel_size=(2, 2), conv_kernel_size=(3, 3),
-                 transpose_conv_kernel_size=(2, 2), deep_vision=True, dropout_in_upconv=True,
+                 transpose_conv_kernel_size=(2, 2), deep_vision=True, dropout=True,
                  stack_op=_StackedConvLayer, pool_op=nn.MaxPool2d, transpose_conv_op=nn.ConvTranspose2d, **kwargs):
         super().__init__()
 
@@ -288,11 +292,12 @@ class UnetPlusPlusWithLogits(nn.Module):
         conv_layers: List[List[Any]] = [[None] * i for i in range(network_depth, 0, -1)]
         down_sample: List[Any] = [None] * (network_depth - 1)
         up_sample: List[List[Any]] = [[None] * i for i in range(network_depth - 1, 0, -1)]
-
+        dropout_rates = (None, 0.05, 0.1, 0.15, 0.2)
         # 创建网络层
         for i in range(network_depth):
             feature_per_layer = start_feature * (2 ** i)
             current_input_channel = in_channels if i == 0 else feature_per_layer // 2
+            dropout_rate = dropout_rates[i] if network_depth > 2 else dropout_rate
 
             for j in range(network_depth - i):
                 # 创建卷积块
@@ -301,18 +306,20 @@ class UnetPlusPlusWithLogits(nn.Module):
                     if i == 0:
                         conv_layers[i][j] = stack_op(in_ch, feature_per_layer, stack_size, conv_kernel_size,
                                                      first_stride=first_stride)
-                    else:
-                        conv_layers[i][j] = stack_op(in_ch, feature_per_layer, stack_size, conv_kernel_size)
                 else:
                     in_ch = feature_per_layer * (j + 1)
-                    conv_layers[i][j] = stack_op(in_ch, feature_per_layer, stack_size, conv_kernel_size, dropout_rate,
-                                                 dropout_in_uplayer=dropout_in_upconv)
+                conv_layers[i][j] = stack_op(in_ch, feature_per_layer, stack_size, conv_kernel_size, dropout_rate,
+                                             dropout=dropout)
 
                 # 创建上采样层（除了最后一列）
                 if j < network_depth - i - 1:
                     up_sample[i][j] = transpose_conv_op(
-                        start_feature * (2 ** (i + 1)), feature_per_layer,
-                        transpose_conv_kernel_size, stride=2, padding=0, bias=False
+                        start_feature * (2 ** (i + 1)),
+                        feature_per_layer,
+                        transpose_conv_kernel_size,
+                        stride=2,
+                        padding=0,
+                        bias=False
                     )
 
             # 创建下采样层（除了最后一层）
@@ -407,7 +414,7 @@ class UnetPlusPlusWithLogits(nn.Module):
 class UnetPlusPlusDenoise(nn.Module):
     def __init__(self, in_channel=3, out_channel=1, network_depth=5, first_stride=1, stack_size=2, dropout_rate=0.1,
                  start_feature=64, segout_use_bias=False, pool_kernel_size=(2, 2), conv_kernel_size=(3, 3),
-                 transpose_conv_kernel_size=(2, 2), deep_vision=True, dropout_in_upconv=True, up_sample_crop=Upsample,
+                 transpose_conv_kernel_size=(2, 2), deep_vision=True, dropout=True, up_sample_crop=Upsample,
                  stack_op=_StackedConvLayer, pool_op=nn.MaxPool2d, transpose_conv_op=nn.ConvTranspose2d, **kwargs):
         super().__init__()
         self.nested_unet = UnetPlusPlusWithLogits(in_channels=in_channel, out_channels=out_channel,
@@ -418,7 +425,7 @@ class UnetPlusPlusDenoise(nn.Module):
                                                   conv_kernel_size=conv_kernel_size,
                                                   transpose_conv_kernel_size=transpose_conv_kernel_size,
                                                   deep_vision=deep_vision,
-                                                  dropout_in_upconv=dropout_in_upconv, up_sample_crop=up_sample_crop,
+                                                  dropout=dropout, up_sample_crop=up_sample_crop,
                                                   stack_op=stack_op, pool_op=pool_op,
                                                   transpose_conv_op=transpose_conv_op)
 
@@ -430,10 +437,11 @@ class UnetPlusPlusDenoise(nn.Module):
         return tuple(x - noise for noise in noiseys)
 
 
-if __name__ == '__main__':
-    m = torch.rand((1, 1, 256, 256))
-    model = UnetWithResidual(1, 1, network_depth=2, dropout_rate=0.1)
-    logits = model(m)
-    print(logits)
+# if __name__ == '__main__':
+#     m = torch.rand((1, 1, 256, 256))
+#     model = UnetPlusPlusDenoise(1, 1, network_depth=5, dropout_rate=0.1)
+#     model.print_net_layers()
+#     logits = model(m)
+#     print(logits)
 
     # print(m[0].squeeze().permute((2, 1, 0)))

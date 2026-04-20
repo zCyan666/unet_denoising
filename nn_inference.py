@@ -96,6 +96,10 @@ def predict(model, arr: str | np.ndarray, device, img_preprocess=None) -> torch.
     #     pred = torch.clamp(pred, 0.0, 1.0)
     return pred
 
+def montecarlo_dropout_predict(model, arr: str | np.ndarray, device):
+    if isinstance(arr, str):
+        arr = np.load(arr)
+
 
 def plot_figure(*arr_args, **styles) -> None:
     _, axes = plt.subplots(1, len(arr_args))
@@ -121,8 +125,7 @@ if __name__ == '__main__':
         'in_channel': 1,
         'out_channel': 1,
         'network_depth': 5,
-        'require_1x1_conv': True,
-        'dropout_rate': 0.0
+        'require_1x1_conv': True
     }
 
     directory = './Data/mag_test'

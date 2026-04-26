@@ -90,7 +90,7 @@ class MyClassificationDataSetNumpy(Dataset):
 
 
 class MyNetworkTrainer:
-    def __init__(self, pt_path, device, resize, data_folder, batch_size, train_epoch,
+    def __init__(self, pt_path, data_path, device, resize, batch_size, train_epoch,
                  net, dataset_cls, loss_fn, optim, *, scaler=None, scheduler=None, view_plot=True,
                  split_ranges=0.1, random_state=12345, shuffle=True):
         self.device = device
@@ -116,7 +116,7 @@ class MyNetworkTrainer:
         self.loss_fn = loss_fn
         self.optim = optim
         self.scheduler = scheduler
-        train_files, val_files = train_test_splitter_classification(data_folder, split_ranges, random_state,
+        train_files, val_files = train_test_splitter_classification(data_path, split_ranges, random_state,
                                                                     shuffle)
 
         train_datasets = dataset_cls(train_files, self.train_transform)
@@ -158,9 +158,9 @@ class MyNetworkTrainer:
             imgs = imgs.to(self.device)
             masks = masks.to(self.device)
 
-            logits = self.net(imgs)
-
-            loss = self.loss_fn(logits, masks)
+            with torch.amp.autocast(device_type=self.device):
+                logits = self.net(imgs)
+                loss = self.loss_fn(logits, masks)
 
             if self.scaler:
                 self.scaler.scale(loss).backward()
@@ -247,37 +247,47 @@ def create_new_log(name: str, directory: str, suffix='.txt') -> TextIO:
         next(gen)
     return open(os.path.join(directory, next(gen)), 'w', encoding='utf-8')
 
+def seed_everything(seed: int):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
 
 def main():
-    torch.manual_seed(32142)
 
+    RANDOM_SEED = 666
     DEVICE = "cuda" if torch.cuda.is_available() else 'cpu'
-    BATCHSIZE = 8
-    SMOOTHING = 1e-7
+    BATCHSIZE = 16
     LR = 0.001
-    NETDEPTH = 5
     EPOCH = 50
     IMGSIZE = 256
     GAMMA = 0.95
-    DROPOUT = True
-    DATAFOLDERS = r"./Data/mag_train"
+
+    seed_everything(RANDOM_SEED)
 
     os.makedirs("./checkpoints", exist_ok=True)
-    pt_path = './checkpoints/unet_denoise_1.pth'
-    model = UnetPlusPlusDenoise(1, 1, network_depth=NETDEPTH, dropout=DROPOUT)
+    pt_path = './checkpoints/unet++_denoise_1.pth'
+    data_path = './data/mag_train'
+    config_path = './configs/net.yaml'
 
+    # Get model
+    model = UnetPlusPlusDenoise.from_yaml(config_path)
+    # model = UnetDenoiser.from_yaml(config_path)
+
+    # Prepare loss function
     loss_fn = WeightL1Loss()
-    #loss_fn = nn.L1Loss()
+    # loss_fn = nn.L1Loss()
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+    # Training utils
+    # 为了使用dropout，我们需要设置权重衰减
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=1e-4)
     scaler = torch.amp.GradScaler(DEVICE)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=GAMMA)
 
     trainer = MyNetworkTrainer(
         pt_path,
+        data_path,
         DEVICE,
         IMGSIZE,
-        DATAFOLDERS,
         BATCHSIZE,
         EPOCH,
         model,
@@ -287,7 +297,7 @@ def main():
         scaler=scaler,
         scheduler=scheduler,
         view_plot=True,
-        random_state=666,
+        random_state=RANDOM_SEED,
     )
 
     logger = create_new_log('train_log', './plots/logs')

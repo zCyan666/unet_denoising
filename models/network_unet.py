@@ -3,6 +3,7 @@ from typing import List, Any, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import yaml
 from torchvision.transforms import CenterCrop
 
 ACTIVATION = [
@@ -20,7 +21,7 @@ class _SingleConv2D(nn.Module):
     relu_kwargs = dict(negative_slope=0.1, inplace=False)
     def __init__(self, in_channel, out_channel, conv_kernel_size,
                  dropout_rate: Optional[int] = 0.1,
-                 stride: Optional[int] = 0.1,
+                 stride: Optional[int] = 1,
                  dropout=False,
                  activation='leakyrelu_norm2d'):
         super().__init__()
@@ -49,23 +50,22 @@ class _SingleConv2D(nn.Module):
 
         x = self.conv2d(x)
 
+        if self.mode == ACTIVATION[0]:
+            x = self.norm2d(self.nonlin(x))
+        elif self.mode == ACTIVATION[1]:
+            x = self.nonlin(self.norm2d(x))
+        elif self.mode == ACTIVATION[2]:
+            x = self.norm2d(self.relu(x))
+
         if self.dropout is not None:
             x = self.dropout(x)
 
-        if self.mode == ACTIVATION[0]:
-            return self.norm2d(self.nonlin(x))
-        elif self.mode == ACTIVATION[1]:
-            return self.nonlin(self.norm2d(x))
-        elif self.mode == ACTIVATION[2]:
-            return self.norm2d(self.relu(x))
-
-        return F.relu(x)
+        return F.relu(x) if self.mode is None else x
 
 
 class _StackedConvLayer(nn.Module):
-    def __init__(self, in_feature_channel: int, out_feature_channel: int, stack_size, conv_kernel_size,
-                 dropout_rate=None,
-                 dropout=False, first_stride=None):
+    def __init__(self, in_feature_channel, out_feature_channel, stack_size, conv_kernel_size,
+                 dropout_rate=None, dropout=False, first_stride=None):
         super().__init__()
         self.input_channel = in_feature_channel
         self.output_channel = out_feature_channel
@@ -82,9 +82,9 @@ class _StackedConvLayer(nn.Module):
     def forward(self, x):
         return self.conv_blocks(x)
 
-class _Attention_block(nn.Module):
+class _Attention_Block(nn.Module):
     def __init__(self, F_g, F_l, F_int):
-        super(_Attention_block, self).__init__()
+        super(_Attention_Block, self).__init__()
         self.W_g = nn.Sequential(
             nn.Conv2d(F_g, F_int, kernel_size=1, stride=1, padding=0, bias=True),
             nn.BatchNorm2d(F_int)
@@ -147,8 +147,7 @@ class _UpLayer(nn.Module):
     # up_features = [512, 256, 128, 64]
 
     def __init__(self, in_channel: int, start_feature: int, feature_count: int, stack_size: int,
-                 conv_kernel_size: tuple, dropout_rate: Optional[int], require_atten=False, *,
-                 cat_crop_transform=CenterCrop,
+                 conv_kernel_size: tuple, require_atten=False, *,
                  stack_op=_StackedConvLayer,
                  up_conv=nn.ConvTranspose2d, **kwargs):
         super().__init__()
@@ -160,15 +159,13 @@ class _UpLayer(nn.Module):
             self.up_conv_blocks.append(up_conv_method)
 
             self.conv_blocks.append(
-                stack_op(in_channel, feature, stack_size, conv_kernel_size, dropout_rate, dropout=True)
+                stack_op(in_channel, feature, stack_size, conv_kernel_size)
             )
             if require_atten:
                 self.attention_blocks.append(
-                    _Attention_block(feature, feature, feature // 2)
+                    _Attention_Block(feature, feature, feature // 2)
                 )
             in_channel = feature
-
-        self.cat_crop_transform = cat_crop_transform
 
     @staticmethod
     def crop_and_concat(src, dst):
@@ -197,14 +194,14 @@ class _UpLayer(nn.Module):
 
 
 class UnetBase(nn.Module):
-    def __init__(self, in_channel=3, out_channel=1,network_depth=5, stack_size=2, down_layer_start_feature=64,
-                 dropout_rate=None, attention=False, segout_use_bias=False, act_last=False,
-                 pool_kernel_size=(2, 2), conv_kernel_size=(3, 3)):
+    def __init__(self, in_channel=3, out_channel=1, network_depth=5, stack_size=2, start_feature=64,
+                 attention=False, segout_use_bias=False, act_last=False,
+                 pool_kernel_size=(2, 2), conv_kernel_size=(3, 3), **kwargs):
         super(UnetBase, self).__init__()
 
         # 1, Left down layer
         self.down = _DownLayer(in_channel,
-                               down_layer_start_feature,
+                               start_feature,
                                network_depth - 1,
                                stack_size,
                                conv_kernel_size,
@@ -225,12 +222,12 @@ class UnetBase(nn.Module):
                            network_depth - 1,
                            stack_size,
                            conv_kernel_size,
-                           dropout_rate,
                            attention)
 
         # 4, final conv1x1 layer
         final_conv_feature = int(self.up.conv_blocks[-1].output_channel)
         self.final_conv = nn.Conv2d(final_conv_feature, out_channel, 1, 1, 0, 1, 1, bias=segout_use_bias)
+
         if act_last:
             self.final_conv = nn.Sequential(
                 *(nn.Conv2d(final_conv_feature, out_channel, 1, 1, 0, 1, 1, bias=segout_use_bias), nn.Sigmoid()))
@@ -244,39 +241,31 @@ class UnetBase(nn.Module):
         # print(f"Final shape: {x.shape}")
         return x
 
+    @classmethod
+    def from_yaml(cls, yaml_file):
+        with open(yaml_file, 'r') as f:
+            cfg = yaml.load(f, Loader=yaml.FullLoader)
+        return cls(**cfg['unet'])
 
-class UnetDenoiser(nn.Module):
-    def __init__(self, in_channel=3, out_channel=1, network_depth=5, stack_size=2, down_layer_start_feature=64,
-                 dropout_rate=None, attention=False, segout_use_bias=False, act_last=False,
-                 pool_kernel_size=(2, 2), conv_kernel_size=(3, 3)):
-        super().__init__()
-        self.base_unet = UnetBase(in_channel=in_channel,
-                                  out_channel=out_channel,
-                                  stack_size=stack_size,
-                                  down_layer_start_feature=down_layer_start_feature,
-                                  dropout_rate=dropout_rate,
-                                  attention=attention,
-                                  network_depth=network_depth,
-                                  segout_use_bias=segout_use_bias,
-                                  act_last=act_last,
-                                  pool_kernel_size=pool_kernel_size,
-                                  conv_kernel_size=conv_kernel_size)
-
+class UnetDenoiser(UnetBase):
     def forward(self, x):
-        y_noise = self.base_unet(x)
-        clean = x - y_noise
+        clean = x - super().forward(x)
         return clean
 
-
-class UnetWithResidual(nn.Module):
-    def __init__(self, in_channel=3, out_channel=1, stack_size=2, down_layer_start_feature=64, negative_slope=0.1,
-                 network_depth=5, segout_use_bias=False, require_1x1_conv=True,
+class UnetWithResidual(UnetBase):
+    def __init__(self, in_channel=3, out_channel=1, stack_size=2, start_feature=64, negative_slope=0.1,
+                 network_depth=5, segout_use_bias=False, act_last=False, require_1x1_conv=True,
                  pool_kernel_size=(2, 2), conv_kernel_size=(3, 3), **kwargs):
-        super().__init__()
-        self.base_unet = UnetBase(in_channel=in_channel, out_channel=out_channel, stack_size=stack_size,
-                                        down_layer_start_feature=down_layer_start_feature, network_depth=network_depth,
-                                        segout_use_bias=segout_use_bias, pool_kernel_size=pool_kernel_size,
-                                        conv_kernel_size=conv_kernel_size)
+        super().__init__(in_channel=in_channel,
+                          out_channel=out_channel,
+                          stack_size=stack_size,
+                          start_feature=start_feature,
+                          attention=False,
+                          network_depth=network_depth,
+                          segout_use_bias=segout_use_bias,
+                          act_last=act_last,
+                          pool_kernel_size=pool_kernel_size,
+                          conv_kernel_size=conv_kernel_size)
 
         self.res_blocks = nn.ModuleList([
             nn.Sequential(
@@ -294,7 +283,7 @@ class UnetWithResidual(nn.Module):
             self.conv = nn.Conv2d(out_channel, out_channel, kernel_size=1, stride=1)
 
     def forward(self, x):
-        x = self.base_unet(x)
+        x = super().forward(x)
         y, temp_x = None, x
 
         for block in self.res_blocks:
@@ -306,12 +295,11 @@ class UnetWithResidual(nn.Module):
 
         return y
 
-
-
 class UnetPlusPlusWithLogits(nn.Module):
-    def __init__(self, in_channels=3, out_channels=1, network_depth=5, first_stride=1, stack_size=2, dropout_rate=0.1,
+    def __init__(self, in_channel=3, out_channel=1, network_depth=5, first_stride=1, stack_size=2,
+                 dropout_rates=(None, 0.05, 0.1, 0.15, 0.2),
                  start_feature=64, segout_use_bias=False, pool_kernel_size=(2, 2), conv_kernel_size=(3, 3),
-                 transpose_conv_kernel_size=(2, 2), deep_vision=True, dropout=True,
+                 deep_vision=True, dropout=True,
                  stack_op=_StackedConvLayer, pool_op=nn.MaxPool2d, transpose_conv_op=nn.ConvTranspose2d, **kwargs):
         super().__init__()
 
@@ -322,12 +310,12 @@ class UnetPlusPlusWithLogits(nn.Module):
         conv_layers: List[List[Any]] = [[None] * i for i in range(network_depth, 0, -1)]
         down_sample: List[Any] = [None] * (network_depth - 1)
         up_sample: List[List[Any]] = [[None] * i for i in range(network_depth - 1, 0, -1)]
-        dropout_rates = (None, 0.05, 0.1, 0.15, 0.2)
+
         # 创建网络层
         for i in range(network_depth):
             feature_per_layer = start_feature * (2 ** i)
-            current_input_channel = in_channels if i == 0 else feature_per_layer // 2
-            dropout_rate = dropout_rates[i] if network_depth > 2 else dropout_rate
+            current_input_channel = in_channel if i == 0 else feature_per_layer // 2
+            dropout_rate = dropout_rates[i]
 
             for j in range(network_depth - i):
                 # 创建卷积块
@@ -346,7 +334,7 @@ class UnetPlusPlusWithLogits(nn.Module):
                     up_sample[i][j] = transpose_conv_op(
                         start_feature * (2 ** (i + 1)),
                         feature_per_layer,
-                        transpose_conv_kernel_size,
+                        (2, 2),
                         stride=2,
                         padding=0,
                         bias=False
@@ -362,10 +350,11 @@ class UnetPlusPlusWithLogits(nn.Module):
         self.up_sample = nn.ModuleList([nn.ModuleList(row) for row in up_sample])
 
         final_input_channel = start_feature
-        self.final_conv = nn.Conv2d(final_input_channel, out_channels, 1, 1, 0, 1, 1, bias=segout_use_bias)
-        # TODO:深度监督
+        self.final_conv = nn.Conv2d(final_input_channel, out_channel, 1, 1, 0, 1, 1, bias=segout_use_bias)
+
+        # 深度监督
         if self.deep_vision:
-            deep_layers = [nn.Conv2d(start_feature, out_channels, 1, bias=segout_use_bias) for _ in
+            deep_layers = [nn.Conv2d(start_feature, out_channel, 1, bias=segout_use_bias) for _ in
                            range(1, network_depth - 1)]
             self.deep_supervision_layers = nn.ModuleList(deep_layers)
 
@@ -377,11 +366,14 @@ class UnetPlusPlusWithLogits(nn.Module):
     def print_net_layers(self):
         for i, lst in enumerate(self.conv_layers):
             print(f"layer: {i}")
-            if hasattr(lst, '__iter__'):
+            if hasattr(lst, '__iter__') or isinstance(lst, nn.ModuleList):
                 for j, block in enumerate(lst):
-                    if block and isinstance(block, _StackedConvLayer):
+                    if block and type(block) == _StackedConvLayer:
                         print(f"x({i}, {j}), "
-                              f"param: [in: {block.input_channel}, out: {block.output_channel}, dropout rate: {block.dropout_rate}]")
+                              f"param: [in: {block.input_channel}, "
+                              f"out: {block.output_channel}, "
+                              f"dropout rate: {block.dropout_rate}]"
+                              )
 
     def forward(self, x):
         x_results: List[Any] = [[None] * i for i in range(self.network_depth, 0, -1)]
@@ -440,43 +432,22 @@ class UnetPlusPlusWithLogits(nn.Module):
         else:
             return final_output
 
+    @classmethod
+    def from_yaml(cls, yaml_file):
+        with open(yaml_file, 'r') as f:
+            cfg = yaml.load(f, Loader=yaml.FullLoader)
+        return cls(**cfg['unet++'])
 
-class UnetPlusPlusDenoise(nn.Module):
-    def __init__(self, in_channel=3, out_channel=1, network_depth=5, first_stride=1, stack_size=2, dropout_rate=0.1,
-                 start_feature=64, segout_use_bias=False, pool_kernel_size=(2, 2), conv_kernel_size=(3, 3),
-                 transpose_conv_kernel_size=(2, 2), deep_vision=True, dropout=True,
-                 stack_op=_StackedConvLayer, pool_op=nn.MaxPool2d, transpose_conv_op=nn.ConvTranspose2d, **kwargs):
-        super().__init__()
-        self.nested_unet = UnetPlusPlusWithLogits(in_channels=in_channel,
-                                                  out_channels=out_channel,
-                                                  network_depth=network_depth,
-                                                  first_stride=first_stride,
-                                                  stack_size=stack_size,
-                                                  dropout_rate=dropout_rate,
-                                                  start_feature=start_feature,
-                                                  segout_use_bias=segout_use_bias,
-                                                  pool_kernel_size=pool_kernel_size,
-                                                  conv_kernel_size=conv_kernel_size,
-                                                  transpose_conv_kernel_size=transpose_conv_kernel_size,
-                                                  deep_vision=deep_vision,
-                                                  dropout=dropout,
-                                                  stack_op=stack_op,
-                                                  pool_op=pool_op,
-                                                  transpose_conv_op=transpose_conv_op)
-
-    def print_net_layers(self):
-        self.nested_unet.print_net_layers()
-
+class UnetPlusPlusDenoise(UnetPlusPlusWithLogits):
     def forward(self, x):
-        noiseys = self.nested_unet(x)
+        noiseys = super().forward(x)
         return tuple(x - noise for noise in noiseys)
+
 
 
 if __name__ == '__main__':
     m = torch.rand((1, 1, 160, 160))
-    model = UnetDenoiser(1, 1, network_depth=5, dropout_rate=0.1, attention=True)
-    # model.print_net_layers()
-    logits = model(m)
-    print(logits)
-
+    model = UnetPlusPlusDenoise(1, 1, network_depth=5, start_feature=32, attention=True)
+    for module in model.modules():
+        print(module)
     # print(m[0].squeeze().permute((2, 1, 0)))

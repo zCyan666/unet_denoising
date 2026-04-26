@@ -1,0 +1,26 @@
+unet++:
+  in_channel: 1
+  out_channel: 1
+  network_depth: 5
+  first_stride: 1
+  stack_size: 2
+  dropout_rate: [null, 0.05, 0.1, 0.15, 0.2]
+  start_feature: 64
+  segout_use_bias: no
+  pool_kernel_size: [2, 2]
+  conv_kernel_size: [3, 3]
+  deep_vision: yes
+  dropout: yes
+
+unet:
+  in_channel: 1
+  out_channel: 1
+  network_depth: 5
+  stack_size: 2
+  start_feature: 64
+  attention: yes
+  segout_use_bias: no
+  act_last: no
+  pool_kernel_size: [2, 2]
+  conv_kernel_size: [3, 3]
+

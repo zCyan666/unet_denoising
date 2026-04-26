@@ -395,8 +395,8 @@ def generate_datasets(num_sample, save_dir: str):
 
 # ============ 主程序 ============
 if __name__ == "__main__":
-    directory_train = "../Data/mag_train"
-    directory_test = "../Data/mag_test"
+    directory_train = "../data/mag_train"
+    directory_test = "../data/mag_test"
 
     os.makedirs(directory_train, exist_ok=True)
     os.makedirs(directory_test, exist_ok=True)

@@ -72,10 +72,9 @@ class _StackedConvLayer(nn.Module):
 
         self.conv_blocks = nn.Sequential(
             *([_SingleConv2D(in_feature_channel, out_feature_channel, conv_kernel_size, dropout_rate,
-                             stride=first_stride,
-                             dropout=dropout)] +
-              [_SingleConv2D(out_feature_channel, out_feature_channel, conv_kernel_size, dropout_rate, stride=None,
-                             dropout=dropout) for _ in range(stack_size - 1)])
+                             stride=first_stride, dropout=dropout)] +
+              [_SingleConv2D(out_feature_channel, out_feature_channel, conv_kernel_size, dropout_rate,
+                             stride=None, dropout=dropout) for _ in range(stack_size - 1)])
         )
         self.dropout_rate = dropout_rate
 
@@ -444,10 +443,23 @@ class UnetPlusPlusDenoise(UnetPlusPlusWithLogits):
         return tuple(x - noise for noise in noiseys)
 
 
+def print_model_params_detailed(model):
+    print(f"{'Layer Name':<50} {'Param Count':<15} {'Size (MB)':<10}")
+    print("-" * 80)
+
+    total_params = 0
+    for name, param in model.named_parameters():
+        param_count = param.numel()
+        total_params += param_count
+        param_mb = param_count * 4 / 1024 / 1024
+        print(f"{name:<50} {param_count:<15,} {param_mb:.4f}")
+
+    print("-" * 80)
+    print(f"{'Total':<50} {total_params:<15,} {total_params * 4 / 1024 / 1024:.2f}")
 
 if __name__ == '__main__':
-    m = torch.rand((1, 1, 160, 160))
-    model = UnetPlusPlusDenoise(1, 1, network_depth=5, start_feature=32, attention=True)
-    for module in model.modules():
-        print(module)
-    # print(m[0].squeeze().permute((2, 1, 0)))
+    # m = torch.rand((1, 3, 256, 256))
+    config_file = '../configs/net.yaml'
+    model = UnetPlusPlusDenoise.from_yaml(config_file)
+    # model.print_net_layers()
+    print_model_params_detailed(model)

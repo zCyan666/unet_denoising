@@ -22,10 +22,7 @@ import random
 plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'PingFang SC']
 plt.rcParams['axes.unicode_minus'] = False
 
-def compute_psnr_metrics(original, denoised, max_val=1.0):
-    mse = np.mean((original - denoised) ** 2)
-    psnr = 10 * np.log10(max_val ** 2 / mse)
-    return psnr, mse
+
 
 def init_model(MyModel: Any, check_path: str | Path, device: str, yaml_path: str | Path):
     model = MyModel.from_yaml(yaml_path)
@@ -113,8 +110,8 @@ if __name__ == '__main__':
     target = np.load(os.path.join(directory, target))
 
     # 预测的磁异常
-    model1 = init_model(UnetDenoiser, './checkpoints/unet_denoise_1.pth', DEVICE, yaml_path)
-    model2 = init_model(UnetPlusPlusDenoise, './checkpoints/unet++_denoise_1.pth', DEVICE, yaml_path)
+    model1 = init_model(UnetDenoiser, './checkpoints/UnetDenoiser.pth', DEVICE, yaml_path)
+    model2 = init_model(UnetPlusPlusDenoise, 'checkpoints/UnetPlusPlusDenoise.pth', DEVICE, yaml_path)
 
     pred1 = predict(model1, noisy, DEVICE)
     pred2, std = montecarlo_dropout_predict(model2, noisy, DEVICE)

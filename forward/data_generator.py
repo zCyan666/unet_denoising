@@ -140,6 +140,7 @@ def generate_plate_with_B0(grid_size=128, area_size=5000, inc_f=45, dec_f=45):
     }
 
     return anomaly, X, Y, params
+
 def sphere_magnetic_field(x, y, z, x0, y0, z0, radius, susceptibility, inc_f, dec_f, B0=50000):
     """
     计算单个球体的磁异常（偶极子近似）
@@ -212,65 +213,6 @@ def sphere_magnetic_field(x, y, z, x0, y0, z0, radius, susceptibility, inc_f, de
     return delta_T.reshape(original_shape)
 
 
-def generate_multi_sphere_anomaly_lunwen(grid_size=64, area_size=5000, n_sphere=None, inc_f=90,
-                                         dec_f=90, n_spheres=None):
-    """
-    生成多个随机球体的磁异常
-
-    参数:
-        grid_size: 网格大小
-        area_size: 区域大小 (米)
-        n_spheres: 球体数量 (None 表示随机 1-5 个)
-
-    返回:
-        anomaly: 总磁异常
-        X, Y: 坐标网格
-        spheres_info: 所有球体的参数列表
-    """
-    # 观测网格
-    x = np.linspace(-area_size, area_size, grid_size)
-    y = np.linspace(-area_size, area_size, grid_size)
-    X, Y = np.meshgrid(x, y)
-    Z = np.zeros_like(X)
-
-    # 随机决定球体数量
-    if n_spheres is None:
-        n_spheres = np.random.randint(1, 4)  # 1-5 个球体
-
-    # 初始化总异常
-    anomaly = np.zeros_like(X, dtype=float)
-    spheres_info = []
-    for i in range(3):
-        x, y, z = [33, -27, -33], [39, 33, -27], [44, 58, 46]
-        # 随机球体参数
-        radius = [24, 30, 22]
-        # bound = (area_size - radius[i] + np.random.uniform(10, 30))
-        cx = x[i]
-        cy = y[i]
-
-        cz = z[i]  # 球心埋深
-        susceptibility = 0.07  # 磁化率
-
-        # 计算当前球体的磁异常
-        sphere_anom = sphere_magnetic_field(
-            X, Y, Z, cx, cy, cz, radius[i], susceptibility, inc_f, dec_f
-        )
-
-        anomaly += sphere_anom
-
-        # 保存球体信息
-
-        spheres_info.append({
-            'id': i + 1,
-            'cx': cx, 'cy': cy, 'cz': cz,
-            'radius': radius[i],
-            'susceptibility': susceptibility,
-            'inc_f': inc_f,
-            'dec_f': dec_f
-        })
-
-    return anomaly, X, Y, spheres_info, inc_f, dec_f
-
 
 def generate_multi_sphere_anomaly(grid_size=64, area_size=5000, inc_f=90,
                                   dec_f=90, n_spheres=None):
@@ -331,6 +273,45 @@ def generate_multi_sphere_anomaly(grid_size=64, area_size=5000, inc_f=90,
     return anomaly, X, Y, spheres_info, inc_f, dec_f
 
 
+def add_mixed_noise_raw(data,
+                        gaussian_std=5.0,
+                        salt_prob=0.01,
+                        pepper_prob=0.01):
+    """
+    直接添加混合噪声，不进行归一化
+
+    参数:
+        data: 2D numpy array，磁异常数据（单位 nT），如范围 -500 到 500
+        gaussian_std: 高斯噪声标准差（nT），建议 1-10
+        salt_prob: 椒噪声概率（高值异常）
+        pepper_prob: 盐噪声概率（低值异常）
+
+    返回:
+        noisy_data: 添加噪声后的数据
+    """
+    noisy = data.copy()
+
+    # 获取数据的实际最大最小值
+    max_val = np.max(data)
+    min_val = np.min(data)
+
+    # 1. 添加高斯噪声
+    gaussian_noise = np.random.normal(0, gaussian_std, noisy.shape)
+    noisy = noisy + gaussian_noise
+
+    # 2. 添加椒盐噪声（直接使用原始数据的极值）
+    salt_mask = np.random.random(noisy.shape) < salt_prob
+    pepper_mask = np.random.random(noisy.shape) < pepper_prob
+
+    # 避免同一位置同时被覆盖
+    salt_mask = salt_mask & ~pepper_mask
+    pepper_mask = pepper_mask & ~salt_mask
+
+    noisy[salt_mask] = max_val  # 椒噪声：数据最大值
+    noisy[pepper_mask] = min_val  # 盐噪声：数据最小值
+
+    return noisy
+
 def add_noise(anomaly, noise_percentage=0.6):
     """添加高斯噪声"""
     signal_std = np.std(anomaly)
@@ -369,14 +350,14 @@ def generate_training_pair(grid_size=128, area_size=5000, inc_f=90,
 
     clean = clean1 + clean2
 
-    noisy, single_noise = add_noise(clean, noise_percentage)
-    return clean, noisy, single_noise, X, Y, spheres_info
+    noisy = add_mixed_noise_custom(clean)
+    return clean, noisy, X, Y, spheres_info
 
 def create_anomaly(i, save_dir):
     noise_percentage = random_float_range(0.5, 0.9)
     n_sphere = random.randint(1, 4)
 
-    clean, noisy, noise, X, Y, spheres_info = generate_training_pair(
+    clean, noisy, X, Y, spheres_info = generate_training_pair(
         grid_size=160, area_size=80, inc_f=90, dec_f=90,
         n_spheres=n_sphere, noise_percentage=noise_percentage
     )
@@ -395,8 +376,8 @@ def generate_datasets(num_sample, save_dir: str):
 
 # ============ 主程序 ============
 if __name__ == "__main__":
-    directory_train = "../data/mag_train"
-    directory_test = "../data/mag_test"
+    directory_train = "../data/mag_train_1"
+    directory_test = "../data/mag_test_1"
 
     os.makedirs(directory_train, exist_ok=True)
     os.makedirs(directory_test, exist_ok=True)

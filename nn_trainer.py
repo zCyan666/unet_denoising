@@ -1,8 +1,12 @@
 import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+
 import random
 import re
 import time
-from typing import Optional, TextIO
+import sys
+from typing import Optional, TextIO, Generator
 from pathlib import Path
 
 import numpy as np
@@ -18,13 +22,12 @@ from torchvision.transforms import v2
 from torchvision.transforms.v2 import functional as F
 from torchvision.transforms.v2 import Transform
 
-from loss_utils import WeightL1Loss
+from loss_utils import WeightL1Loss, MSEWithKLLoss
 from models.network_unet import (
     UnetDenoiser,
     UnetPlusPlusDenoise
 )
-
-from plots.transform_view import plot
+from plots.plots_helper import show_image
 
 def train_test_splitter_classification(folder, split_amount=0.1, random=123, shuffle=True):
     files = os.listdir(folder)
@@ -92,7 +95,7 @@ class MyClassificationDataSetNumpy(Dataset):
 class MyNetworkTrainer:
     def __init__(self, pt_path, data_path, device, resize, batch_size, train_epoch,
                  net, dataset_cls, loss_fn, optim, *, scaler=None, scheduler=None, view_plot=True,
-                 split_ranges=0.1, random_state=12345, shuffle=True):
+                 split_ranges=0.1, random_state=12345, shuffle=True, multi_processing=False):
         self.device = device
         self.train_epoch = train_epoch
         self.save_pth = Path(pt_path) if isinstance(pt_path, str) else pt_path
@@ -127,6 +130,7 @@ class MyNetworkTrainer:
             batch_size=batch_size,
             shuffle=True,
             pin_memory=True if self.device == "cuda" else False,
+            num_workers=os.cpu_count() if multi_processing else 0,
         )
 
         self.val_loader = DataLoader(
@@ -134,7 +138,7 @@ class MyNetworkTrainer:
             batch_size=batch_size,
             shuffle=False,
             pin_memory=True if self.device == "cuda" else False,
-
+            num_workers=os.cpu_count() if multi_processing else 0,
         )
         self.batch_size = batch_size
         self.scaler = scaler
@@ -151,8 +155,6 @@ class MyNetworkTrainer:
     def _train_one_epoch(self, progress, epoch, thres):
         self.net.train()
         total_loss = 0
-
-        # loop = tqdm.tqdm(self.train_loader)
 
         for idx, (imgs, masks) in enumerate(progress):
             imgs = imgs.to(self.device)
@@ -176,14 +178,16 @@ class MyNetworkTrainer:
             total_loss += loss.item()
 
             progress.set_postfix(loss=loss.item())
-            # self.view_plot = False
 
         return total_loss / len(self.train_loader)
 
     def _validation(self):
         self.net.eval()
         total_loss = 0
-        self.view_plot = True
+        total_psnr_metric = 0
+
+        trigger_once = True if self.view_plot else False
+
         with torch.no_grad():
             for imgs, masks in self.val_loader:
                 imgs = imgs.to(self.device)
@@ -195,47 +199,68 @@ class MyNetworkTrainer:
                 if isinstance(logits, tuple):
                     logits = sum(logits) / len(logits)
 
-                if self.view_plot:
+                psnr = compute_psnr_metrics(masks, logits)
+
+                if trigger_once:
                     idx = random.randint(0, self.batch_size - 1)
                     if self.device == 'cpu':
-                        plot([imgs[idx].clone(), masks[idx].clone(), logits[idx].clone()], cmap='gist_rainbow_r')
+                        show_image([imgs[idx].clone(), masks[idx].clone(), logits[idx].clone()], cmap='gist_rainbow_r')
                     else:
-                        plot([imgs[idx].cpu(), masks[idx].cpu(), logits[idx].cpu()], cmap='gist_rainbow_r')
-                    self.view_plot = False
+                        show_image([imgs[idx].cpu(), masks[idx].cpu(), logits[idx].cpu()], cmap='gist_rainbow_r')
+                    trigger_once = False
 
                 total_loss += loss.item()
+                total_psnr_metric += psnr.item()
 
-        return total_loss / len(self.val_loader)
+
+        return total_loss / len(self.val_loader), total_psnr_metric / len(self.val_loader)
 
     def train(self, logger: TextIO) -> None:
         loss_curr = float('inf')
-        for epoch in range(self.train_epoch):
-            prog = tqdm.tqdm(self.train_loader, desc=f"Epoch: [{epoch + 1}/{self.train_epoch}]")
-            train_loss = self._train_one_epoch(prog, epoch, 10.0)
-            val_loss = self._validation()
+        try:
+            for epoch in range(self.train_epoch):
+                prog = tqdm.tqdm(self.train_loader, desc=f"Epoch: [{epoch + 1}/{self.train_epoch}]")
 
-            logger.write(f"Epoch: {epoch}\n")
-            logger.write(f"Train loss: {train_loss:.6f}\nVal loss: {val_loss:.6f}\n")
+                train_loss = self._train_one_epoch(prog, epoch, 10.0)
+                val_loss, psnr_metric = self._validation()
 
-            print('=' * 70)
-            print(f"Epoch {epoch + 1}/{self.train_epoch}")
-            print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+                logger.write(f"Epoch: {epoch}\n")
+                logger.write(f"Train loss: {train_loss:.6f}\nVal loss: {val_loss:.6f}\n")
+                logger.write(f"PSNR metric: {psnr_metric:.2f}\n")
+                logger.flush()
 
-            if self.scheduler is not None:
-                self.scheduler.step()
-                print(f"Current Lr: {self.scheduler.get_last_lr()}")
+                print('=' * 70)
+                print(f"Epoch {epoch + 1}/{self.train_epoch}")
+                print(f"Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}")
+                print(f"psnr metric: {psnr_metric:.6f}")
 
-            if val_loss < loss_curr:
-                loss_curr = val_loss
-                print(f"Saving model...")
-                torch.save(self.net.state_dict(), self.save_pth)
-            print('=' * 70)
-            time.sleep(0.01)
-        logger.close()
+                if self.scheduler is not None:
+                    self.scheduler.step()
+                    print(f"Current Lr: {self.scheduler.get_last_lr()}")
 
+                if val_loss < loss_curr:
+                    loss_curr = val_loss
+                    print(f"Saving model...")
+                    torch.save(self.net.state_dict(), self.save_pth)
+                print('=' * 70)
+                time.sleep(0.01)
+        except KeyboardInterrupt:
+            logger.close()
+            print('Keyboard interrupted, cleaning log file...', file=sys.stderr)
+            if os.path.exists(logger.name):
+                os.remove(logger.name)
+            sys.exit(1)
+        finally:
+            if not logger.closed:
+                logger.close()
+
+def compute_psnr_metrics(original, denoised, max_val=1.0):
+    mse = torch.mean((original - denoised) ** 2)
+    psnr = 10 * torch.log10(max_val ** 2 / mse)
+    return psnr
 
 def create_new_log(name: str, directory: str, suffix='.txt') -> TextIO:
-    def gen_name():
+    def gen_name() -> Generator:
         i = 0
         while True:
             yield f"{name}_{i}{suffix}"
@@ -253,7 +278,7 @@ def seed_everything(seed: int):
     random.seed(seed)
 
 def main():
-
+    os.makedirs("./checkpoints", exist_ok=True)
     RANDOM_SEED = 666
     DEVICE = "cuda" if torch.cuda.is_available() else 'cpu'
     BATCHSIZE = 16
@@ -264,25 +289,24 @@ def main():
 
     seed_everything(RANDOM_SEED)
 
-    os.makedirs("./checkpoints", exist_ok=True)
-    pt_path = './checkpoints/unet++_denoise_1.pth'
-    data_path = './data/mag_train'
-    config_path = './configs/net.yaml'
-
     # Get model
+    config_path = './configs/net.yaml'
     model = UnetPlusPlusDenoise.from_yaml(config_path)
     # model = UnetDenoiser.from_yaml(config_path)
-
+    pt_path = f'./checkpoints/{model.__class__.__name__}.pth'
+    
     # Prepare loss function
+    # loss_fn = nn.MSELoss()
+    # loss_fn = MSEWithKLLoss(0.02)
     loss_fn = WeightL1Loss()
-    # loss_fn = nn.L1Loss()
 
     # Training utils
     # 为了使用dropout，我们需要设置权重衰减
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     scaler = torch.amp.GradScaler(DEVICE)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=GAMMA)
 
+    data_path = './data/mag_train'
     trainer = MyNetworkTrainer(
         pt_path,
         data_path,
@@ -295,8 +319,8 @@ def main():
         loss_fn,
         optimizer,
         scaler=scaler,
-        scheduler=scheduler,
-        view_plot=True,
+        scheduler=None,
+        view_plot=False,
         random_state=RANDOM_SEED,
     )
 

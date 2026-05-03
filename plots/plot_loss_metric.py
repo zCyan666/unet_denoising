@@ -1,34 +1,55 @@
+from collections import defaultdict
 import matplotlib.pyplot as plt
 import os
 
-log_items = {'epochs': [], 'train_loss': [], 'val_loss': []}
 directory = './logs'
 files = filter(lambda s: s.endswith('.txt'), os.listdir(directory))
 log = os.path.join(directory, tuple(files)[-1])
 print(f"loaded log: {log}")
+
 with open(log, 'r', encoding='utf-8') as f:
+    log_plots = defaultdict(list)
+    while line := next(f).split(':')[0]:
+        if line not in log_plots:
+            log_plots.update({line: []})
+        else:
+            f.seek(0)
+            break
     for i, line in enumerate(f.readlines()):
         splits = line.split(':')
-        it_len = len(log_items)
-        for s in splits:
+        key = splits[0]
+        for s in splits[1:]:
             try:
-                if i % it_len == 0:
-                    log_items['epochs'].append(eval(s))
-                    continue
-                if i % it_len == 1:
-                    log_items['train_loss'].append(eval(s))
-                    continue
-                else:
-                    log_items['val_loss'].append(eval(s))
-
-            except Exception as e:
+                log_plots[key].append(eval(s))
+            except Exception:
                 pass
 
-ax = plt.subplot()
-ax.plot(log_items.get('epochs'), log_items.get('train_loss'), label='train loss')
-ax.plot(log_items.get('epochs'), log_items.get('val_loss'), label='val loss')
-ax.set_title('loss')
-ax.legend()
-ax.grid(True, alpha=0.5)
-ax.semilogy()
+fig1 = plt.figure(1)
+ax1 = fig1.add_subplot(1, 1, 1)
+ax1.set_title('loss')
+
+fig2 = plt.figure(2)
+ax2 = fig2.add_subplot(1, 1, 1)
+ax2.set_title('metric')
+
+x = str('')
+for k in log_plots:
+    if 'epoch' in k.lower():
+        x = k
+        continue
+
+    if 'loss' in k:
+        ax1.plot(log_plots[x], log_plots[k], label=k)
+
+        ax1.legend()
+        ax1.grid(True, alpha=0.5)
+        if min(log_plots[k]) < 1e-3:
+            ax1.semilogy()
+
+    if 'metric' in k:
+        ax2.plot(log_plots[x], log_plots[k], label=k)
+
+        ax2.legend()
+        ax2.grid(True, alpha=0.5)
+
 plt.show()

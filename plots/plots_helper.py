@@ -6,7 +6,7 @@ from torchvision.transforms import v2
 from torchvision.transforms.v2 import functional as F
 
 
-def plot(imgs, row_title=None, bbox_width=3, **imshow_kwargs):
+def show_image(imgs, row_title=None, bbox_width=3, **imshow_kwargs):
     if not isinstance(imgs[0], list):
         # Make a 2d grid even if there's just 1 row
         imgs = [imgs]

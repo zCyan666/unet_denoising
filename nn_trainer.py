@@ -1,7 +1,4 @@
 import os
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-
 import random
 import re
 import time
@@ -129,16 +126,14 @@ class MyNetworkTrainer:
             train_datasets,
             batch_size=batch_size,
             shuffle=True,
-            pin_memory=True if self.device == "cuda" else False,
-            num_workers=os.cpu_count() if multi_processing else 0,
+            pin_memory=True if self.device == "cuda" else False
         )
 
         self.val_loader = DataLoader(
             val_datasets,
             batch_size=batch_size,
             shuffle=False,
-            pin_memory=True if self.device == "cuda" else False,
-            num_workers=os.cpu_count() if multi_processing else 0,
+            pin_memory=True if self.device == "cuda" else False
         )
         self.batch_size = batch_size
         self.scaler = scaler
@@ -244,6 +239,7 @@ class MyNetworkTrainer:
                     torch.save(self.net.state_dict(), self.save_pth)
                 print('=' * 70)
                 time.sleep(0.01)
+        # TODO: 正确处理异常
         except KeyboardInterrupt:
             logger.close()
             print('Keyboard interrupted, cleaning log file...', file=sys.stderr)

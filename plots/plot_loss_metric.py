@@ -3,11 +3,11 @@ import matplotlib.pyplot as plt
 import os
 
 directory = './logs'
-files = filter(lambda s: s.endswith('.txt'), os.listdir(directory))
-log = os.path.join(directory, tuple(files)[-1])
-print(f"loaded log: {log}")
+files = sorted(os.listdir(directory), key=lambda s: os.path.getmtime(os.path.join(directory, s)))
+log_latest = os.path.join(directory, files[-1])
+print(f"loaded log: {log_latest}")
 
-with open(log, 'r', encoding='utf-8') as f:
+with open(log_latest, 'r', encoding='utf-8') as f:
     log_plots = defaultdict(list)
     while line := next(f).split(':')[0]:
         if line not in log_plots:

@@ -1,7 +1,10 @@
 import os
 import random
+from typing import Mapping, Sequence, MutableMapping, Any
+import json
 import harmonica as hm
 import numpy as np
+
 
 def sphere_magnetic_field(x, y, z, x0, y0, z0, radius, susceptibility, inc_f, dec_f, B0):
     """
@@ -18,10 +21,6 @@ def sphere_magnetic_field(x, y, z, x0, y0, z0, radius, susceptibility, inc_f, de
     返回:
         delta_T: 总磁场异常 (nT)
     """
-    # 转换为 numpy 数组
-    x = np.asarray(x)
-    y = np.asarray(y)
-    z = np.asarray(z)
     original_shape = x.shape
     x = x.flatten()
     y = y.flatten()
@@ -74,7 +73,147 @@ def sphere_magnetic_field(x, y, z, x0, y0, z0, radius, susceptibility, inc_f, de
 
     return delta_T.reshape(original_shape)
 
-def generate_plate_anomaly(grid_size: int, area_size: int, susceptibility: float, inc_f: int, dec_f: int, B0=50000):
+
+
+
+def cube_magnetic_field(x: np.ndarray, y: np.ndarray, z: np.ndarray, length: float, width: float, height: float,
+                        cx: float, cy: float, cz: float, susceptibility: float, inc_f: int, dec_f: int, B0: int):
+    """
+    生成随机位置和尺寸的立方体磁异常
+    """
+    x1, x2 = cx - length / 2, cx + length / 2
+    y1, y2 = cy - width / 2, cy + width / 2
+    z1, z2 = cz, cz + height
+
+    # 计算磁化强度 (A/m)
+    mu0 = 4 * np.pi * 1e-7
+    H0 = B0 * 1e-9 / mu0
+    J = susceptibility * H0
+
+    inc_rad = np.radians(inc_f)
+    dec_rad = np.radians(dec_f)
+    Mx = J * np.cos(inc_rad) * np.cos(dec_rad)
+    My = J * np.cos(inc_rad) * np.sin(dec_rad)
+    Mz = J * np.sin(inc_rad)
+
+    # 计算磁场三分量
+    b_e, b_n, b_u = hm.prism_magnetic(
+        [x.ravel(), y.ravel(), z.ravel()],
+        [x1, x2, y1, y2, z1, z2],
+        (Mx, My, Mz),
+        field="b"
+    )
+
+    b_e = b_e.reshape(x.shape)
+    b_n = b_n.reshape(x.shape)
+    b_u = b_u.reshape(x.shape)
+
+    # 投影到地磁场方向（单位向量）
+    inc_rad = np.radians(inc_f)
+    dec_rad = np.radians(dec_f)
+    fx = np.cos(inc_rad) * np.cos(dec_rad)
+    fy = np.cos(inc_rad) * np.sin(dec_rad)
+    fz = np.sin(inc_rad)
+
+    anomaly = b_e * fx + b_n * fy + b_u * fz
+
+    return anomaly
+
+
+def generate_multi_sphere_anomaly(grid_size: int, area_size: int, susceptibility: float | np.ndarray, inc_f: int,
+                                  dec_f: int, n_spheres: int, B0: int):
+    """
+    生成多个随机球体的磁异常
+
+    参数:
+        grid_size: 网格大小
+        area_size: 区域大小 (米)
+        n_spheres: 球体数量
+    返回:
+        anomaly: 总磁异常
+        X, Y: 坐标网格
+        spheres_info: 所有球体的参数列表
+    """
+    # 观测网格
+    x = np.linspace(-area_size, area_size, grid_size)
+    y = np.linspace(-area_size, area_size, grid_size)
+    X, Y = np.meshgrid(x, y)
+    Z = np.zeros_like(X)
+
+    # 初始化总异常
+    anomaly = np.zeros_like(X, dtype=float)
+    spheres_info: MutableMapping[str, Any] = {'shape': 'sphere'}
+    for i in range(n_spheres):
+        # 随机球体参数
+        radius = np.random.uniform(5, 20)
+        bound = (area_size - radius - np.random.uniform(5, 10))
+        cx = np.random.uniform(-bound, bound)
+        cy = np.random.uniform(-bound, bound)
+        cz = np.random.uniform(40, 60)  # 球心埋深
+
+        kappa = susceptibility if isinstance(susceptibility, float) else susceptibility[i]
+
+        # 计算当前球体的磁异常
+        sphere_anom = sphere_magnetic_field(
+            X, Y, Z, cx, cy, cz, radius, kappa, inc_f, dec_f, B0
+        )
+
+        anomaly += sphere_anom
+
+        # 保存球体信息
+        spheres_info.update(
+            {
+                'ID: ' + str(i + 1):
+                {
+                    'location': [cx, cy, cz],
+                    'radius': radius,
+                    'susceptibility': kappa,
+                }
+            }
+        )
+
+    return anomaly, spheres_info
+
+def generate_multi_cube_anomaly(grid_size: int, area_size: int, susceptibility: float | np.ndarray, inc_f: int,
+                                  dec_f: int, n_cubes: int, B0: int):
+    x = np.linspace(-area_size, area_size, grid_size)
+    y = np.linspace(-area_size, area_size, grid_size)
+    X, Y = np.meshgrid(x, y)
+    Z = np.zeros_like(X)  # 地表观测
+
+    anomaly = np.zeros_like(X, dtype=float)
+    cubes_info: MutableMapping[str, Any] = {'shape': 'cube'}
+    for i in range(n_cubes):
+
+        # 随机长方体参数
+        length = np.random.uniform(20, 40)  # x 方向长度
+        width = np.random.uniform(20, 40)  # y 方向长度
+        height = np.random.uniform(20, 40)  # z 方向厚度
+
+        cx = np.random.uniform(-area_size / 2, area_size / 2)  # 中心 x
+        cy = np.random.uniform(-area_size / 2, area_size / 2)  # 中心 y
+        cz = np.random.uniform(20, 50)  # 顶面埋深
+
+        kappa = susceptibility if isinstance(susceptibility, float) else susceptibility[i]
+        cube_ano = cube_magnetic_field(X, Y, Z, length, width, height, cx, cy, cz,
+                                            kappa, inc_f, dec_f, B0)
+        anomaly += cube_ano
+        cubes_info.update(
+            {
+                'ID: ' + str(i + 1):
+                {
+                    'location': [cx, cy, cz],
+                    'length': length,
+                    'width': width,
+                    'height': height,
+                    'susceptibility': kappa
+                }
+            }
+        )
+
+    return anomaly, cubes_info
+
+def generate_plate_anomaly(grid_size: int, area_size: int, susceptibility: float, inc_f: int, dec_f: int, B0: int):
     """
     使用地磁场总强度 B0 生成板状体磁异常
     """
@@ -83,14 +222,14 @@ def generate_plate_anomaly(grid_size: int, area_size: int, susceptibility: float
     x, y = np.meshgrid(x, y)
 
     # 随机生成板状体参数
-    b = np.random.uniform(0.1, 1)  # 半宽度（m）
+    b = np.random.uniform(5, 10)  # 半宽度（m）
     h = np.random.uniform(10, 20)  # 顶面埋深（m）
-    D = np.random.uniform(400, 800)  # 向下延深（m）
+    D = np.random.uniform(50, 200)  # 向下延深（m）
     alpha = 30
-    #kappa = np.random.uniform(0.3, 0.8)  # 磁化率（SI）
+    # kappa = np.random.uniform(0.3, 0.8)  # 磁化率（SI）
 
     # 随机位置
-    margin = b + 100
+    margin = b + area_size
     x0 = np.random.uniform(-area_size + margin, area_size - margin)
     y0 = np.random.uniform(-area_size + margin, area_size - margin)
 
@@ -160,124 +299,19 @@ def generate_plate_anomaly(grid_size: int, area_size: int, susceptibility: float
     anomaly = Hax * np.cos(inc_rad) + Za * np.sin(inc_rad)
 
     params = {
-        'x0': x0, 'y0': y0,
-        'strike_angle': strike_angle,
-        'b': b, 'h': h, 'D': D, 'alpha': alpha
+        'shape': 'plate',
+        'ID: 1':
+        {
+            'location': [x0, y0],
+            'strike_angle': strike_angle,
+            'b': b, 'h': h, 'D': D, 'alpha': alpha
+        }
     }
 
     return anomaly, params
 
-def generate_cube_anomaly(grid_size: int, area_size: int, susceptibility: float, inc_f: int, dec_f: int, B0=50000):
-    """
-    生成随机位置和尺寸的立方体磁异常
-    """
-    # 随机长方体参数
-    length = np.random.uniform(5, 10)   # x 方向长度
-    width = np.random.uniform(60, 90)    # y 方向长度
-    height = np.random.uniform(30, 50)   # z 方向厚度
-    cx = np.random.uniform(-area_size/2, area_size/2)    # 中心 x
-    cy = np.random.uniform(-area_size/2, area_size/2)    # 中心 y
-    top = np.random.uniform(10, 20)                     # 顶面埋深
 
-    x1, x2 = cx - length/2, cx + length/2
-    y1, y2 = cy - width/2, cy + width/2
-    z1, z2 = top, top + height
-
-    # 计算磁化强度 (A/m)
-    mu0 = 4 * np.pi * 1e-7
-    H0 = B0 * 1e-9 / mu0
-    J = susceptibility * H0
-
-    inc_rad = np.radians(inc_f)
-    dec_rad = np.radians(dec_f)
-    Mx = J * np.cos(inc_rad) * np.cos(dec_rad)
-    My = J * np.cos(inc_rad) * np.sin(dec_rad)
-    Mz = J * np.sin(inc_rad)
-
-    x = np.linspace(-area_size, area_size, grid_size)
-    y = np.linspace(-area_size, area_size, grid_size)
-    x, y = np.meshgrid(x, y)
-    z = np.zeros_like(x)  # 地表观测
-
-    # 计算磁场三分量
-    b_e, b_n, b_u = hm.prism_magnetic(
-        [x.ravel(), y.ravel(), z.ravel()],
-        [x1, x2, y1, y2, z1, z2],
-        (Mx, My, Mz),
-        field="b"
-    )
-
-    b_e = b_e.reshape(x.shape)
-    b_n = b_n.reshape(x.shape)
-    b_u = b_u.reshape(x.shape)
-
-    # 投影到地磁场方向（单位向量）
-    inc_rad = np.radians(inc_f)
-    dec_rad = np.radians(dec_f)
-    fx = np.cos(inc_rad) * np.cos(dec_rad)
-    fy = np.cos(inc_rad) * np.sin(dec_rad)
-    fz = np.sin(inc_rad)
-
-    anomaly = b_e * fx + b_n * fy + b_u * fz
-
-    params = {
-        'length': length, 'width': width, 'height': height,
-        'top': top
-    }
-
-    return anomaly, params
-
-def generate_multi_sphere_anomaly(grid_size: int, area_size: int, susceptibility: float | tuple[float, ...], inc_f: int, dec_f: int, n_spheres=5, B0=50000):
-    """
-    生成多个随机球体的磁异常
-
-    参数:
-        grid_size: 网格大小
-        area_size: 区域大小 (米)
-        n_spheres: 球体数量
-    返回:
-        anomaly: 总磁异常
-        X, Y: 坐标网格
-        spheres_info: 所有球体的参数列表
-    """
-    # 观测网格
-    x = np.linspace(-area_size, area_size, grid_size)
-    y = np.linspace(-area_size, area_size, grid_size)
-    X, Y = np.meshgrid(x, y)
-    Z = np.zeros_like(X)
-
-    # 初始化总异常
-    anomaly = np.zeros_like(X, dtype=float)
-    spheres_info = []
-    for i in range(n_spheres):
-        # 随机球体参数
-        radius = np.random.uniform(20, 30)  # 半径 50-200m
-        bound = (area_size - radius - np.random.uniform(5, 10))
-        cx = np.random.uniform(-bound, bound)
-        cy = np.random.uniform(-bound, bound)
-
-        cz = np.random.uniform(40, 60)  # 球心埋深
-
-        kappa = susceptibility if type(susceptibility) == int else susceptibility[i]
-
-        # 计算当前球体的磁异常
-        sphere_anom = sphere_magnetic_field(
-            X, Y, Z, cx, cy, cz, radius, kappa, inc_f, dec_f, B0
-        )
-
-        anomaly += sphere_anom
-
-        # 保存球体信息
-
-        spheres_info.append({
-            'id': i + 1,
-            'x0': cx, 'y0': cy, 'z0': cz,
-            'radius': radius,
-        })
-
-    return anomaly, spheres_info
-
-def add_mixed_noise(data, *, gaussian_scale=0.2, salt_pepper_density=0.02, salt_ratio=0.2):
+def add_mixed_noise(data, gaussian_ratio=0.2, pepper_ratio=0.2, salt_ratio=0.2):
     """
     添加混合噪声（参数更简洁），不归一化
 
@@ -289,28 +323,20 @@ def add_mixed_noise(data, *, gaussian_scale=0.2, salt_pepper_density=0.02, salt_
     """
     noisy = data.copy()
 
-    # 获取原始数据的极值
-    max_val = np.max(data)
-    min_val = np.min(data)
-
     # 1. 添加高斯噪声
-    gaussian_std = np.std(noisy) * gaussian_scale
+    gaussian_std = np.std(noisy) * gaussian_ratio
     gaussian = np.random.normal(0, gaussian_std, noisy.shape)
     noisy = noisy + gaussian
 
     # 2. 添加椒盐噪声
-    salt_prob = salt_pepper_density * salt_ratio
-    pepper_prob = salt_pepper_density * (1 - salt_ratio)
+    data_prob = 1 - pepper_ratio - salt_ratio
+    mask = np.random.choice((0, -1, 1), size=data.shape[:2], p=[pepper_ratio, data_prob, salt_ratio])
 
-    salt_mask = np.random.random(noisy.shape) < salt_prob
-    pepper_mask = np.random.random(noisy.shape) < pepper_prob
-    salt_mask = salt_mask & ~pepper_mask
-    pepper_mask = pepper_mask & ~salt_mask
-
-    noisy[salt_mask] = max_val
-    noisy[pepper_mask] = min_val
+    noisy[mask == 1] = np.max(data)
+    noisy[mask == 0] = np.min(data)
 
     return noisy
+
 
 # standardize = lambda x: (x - np.mean(x)) / np.std(x)
 def standardize_min_max(x, y):
@@ -320,49 +346,72 @@ def standardize_min_max(x, y):
     y_hat = (y - min_xy) / (max_xy - min_xy)
     return y_hat, x_hat
 
+
 def random_float_range(min_v, max_v):
     return min_v + random.random() * (max_v - min_v)
+
 
 def random_float_range_numpy(min_v, max_v, size=None):
     return min_v + np.random.random(size) * (max_v - min_v)
 
+
 def restore_value(x, x_orign_min, x_orign_max):
     return x * (x_orign_max - x_orign_min) + x_orign_min
 
-def combine_anomaly(grid_size, area_size, inc_f, dec_f, n_spheres):
-    spheres_sus = random_float_range_numpy(0.02, 0.15, n_spheres)
-    plate_sus = random_float_range(0.2, 0.5)
-    cube_sus = random_float_range(0.1, 0.3)
 
-    spheres_ano, _ = generate_multi_sphere_anomaly(grid_size, area_size, spheres_sus, inc_f, dec_f, n_spheres)
-    plate_ano, _ = generate_plate_anomaly(grid_size, area_size, plate_sus, inc_f, dec_f)
-    cube_ano, _ = generate_cube_anomaly(grid_size, area_size, cube_sus, inc_f, dec_f)
+def combine_anomaly(*, grid_size, area_size, inc_f, dec_f, n_spheres, n_cubes):
+    # 总磁场强度常量
+    B0 = 50000
+
+    # 定义各个物体磁化率
+    spheres_sus = random_float_range_numpy(0.05, 0.3, n_spheres)
+    plate_sus = random_float_range(0.1, 0.2)
+    cube_sus = random_float_range_numpy(0.05, 0.2, n_cubes)
+
+    spheres_ano, sp_info = generate_multi_sphere_anomaly(grid_size, area_size, spheres_sus, inc_f, dec_f, n_spheres, B0)
+    plate_ano, plate_info = generate_plate_anomaly(grid_size, area_size, plate_sus, inc_f, dec_f, B0)
+    cube_ano, cube_info = generate_multi_cube_anomaly(grid_size, area_size, cube_sus, inc_f, dec_f, n_cubes, B0)
 
     total_ano = spheres_ano + plate_ano + cube_ano
-    return total_ano
+    return total_ano, (sp_info, plate_info, cube_info)
 
-def create_training_pairs(i, save_dir):
-    gaussian_scale = random_float_range(0.01, 0.5)
-    n_sphere = random.randint(1, 4)
-    salt_ratio = random_float_range(0.2, 0.8)
 
-    anomaly = combine_anomaly(
-        grid_size=160, area_size=80, inc_f=90, dec_f=90, n_spheres=n_sphere
+def create_training_pairs(i: int, save_dir: str) -> tuple[int, tuple[Mapping, ...]]:
+    n_spheres = random.randint(1, 4)
+    n_cubes = random.randint(1, 3)
+
+    gaussian_ratio = random_float_range(0.01, 0.4)
+    salt_ratio = random_float_range(0.0, 0.1)
+    pepper_ratio = random_float_range(0.0, 0.1)
+
+    anomaly, groups = combine_anomaly(
+        grid_size=160, area_size=80, inc_f=90, dec_f=0, n_spheres=n_spheres, n_cubes=n_cubes
     )
-    anomaly_noise = add_mixed_noise(anomaly, gaussian_scale=gaussian_scale, salt_ratio=salt_ratio)
+
+    anomaly_noise = add_mixed_noise(anomaly, gaussian_ratio, pepper_ratio, salt_ratio)
 
     ano_train, ano_label = standardize_min_max(anomaly, anomaly_noise)
 
-    np.save(os.path.join(save_dir, f"anomaly_{i}_{n_sphere}s.npy"), ano_train)
-    np.save(os.path.join(save_dir, f"anomaly_mask_{i}_{n_sphere}s.npy"), ano_label)
+    np.save(os.path.join(save_dir, f"anomaly_{i}_{n_spheres}s_{n_cubes}c.npy"), ano_train)
+    np.save(os.path.join(save_dir, f"anomaly_mask_{i}_{n_spheres}s_{n_cubes}c.npy"), ano_label)
 
-def generate_datasets(num_sample, save_dir: str):
-    import multiprocessing
+    return i, groups
+
+def generate_datasets(num_sample: int, save_dir: str, saving_info: bool):
+    from concurrent.futures import ProcessPoolExecutor as P
     import functools
     creator = functools.partial(create_training_pairs, save_dir=save_dir)
-    with multiprocessing.Pool(processes=min(os.cpu_count(), 63)) as p:
-        p.map(creator, range(num_sample))
+    with P(max_workers=os.cpu_count()) as p:
+        objs = list(p.map(creator, range(num_sample)))
 
+    if not saving_info:
+        return
+
+    if len(objs) > 0:
+        objs.sort(key=lambda x: x[0])
+        parent_path = os.path.dirname(save_dir)
+        with open(os.path.join(parent_path, "anomaly_info.json"), "w") as f:
+            json.dump(objs, f, indent=2)
 
 # ============ 主程序 ============
 if __name__ == "__main__":
@@ -372,5 +421,6 @@ if __name__ == "__main__":
     os.makedirs(directory_train, exist_ok=True)
     os.makedirs(directory_test, exist_ok=True)
 
-    generate_datasets(5000, directory_train)
-    generate_datasets(100, directory_test)
+    # create_training_pairs(0, directory_test, None)
+    generate_datasets(10000, directory_train, False)
+    generate_datasets(10, directory_test, True)
